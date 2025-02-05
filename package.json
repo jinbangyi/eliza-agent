@@ -14,16 +14,17 @@
         "format:fix": "biome format --write src/"
     },
     "dependencies": {
+        "@elizaos/adapter-sqlite": "0.1.9",
         "@elizaos/client-direct": "0.1.9",
         "@elizaos/core": "0.1.9",
         "@elizaos/plugin-di": "0.1.9",
-        "@elizaos/adapter-sqlite": "0.1.9",
         "better-sqlite3": "11.6.0",
         "sharp": "^0.33.2",
         "yargs": "17.7.2"
     },
     "devDependencies": {
         "@biomejs/biome": "1.5.3",
+        "@types/better-sqlite3": "^7.6.12",
         "@types/node": "22.13.1",
         "@types/yargs": "^17.0.33",
         "madge": "^8.0.0",

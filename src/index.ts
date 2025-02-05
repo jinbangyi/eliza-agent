@@ -4,7 +4,6 @@ import {
     CacheStore,
     type Character,
     type Client,
-    Clients,
     DbCacheAdapter,
     defaultCharacter,
     elizaLogger,
@@ -22,9 +21,9 @@ import {
 
 import { DirectClient } from '@elizaos/client-direct';
 import { normalizeCharacter } from '@elizaos/plugin-di';
-import { SqliteDatabaseAdapter } from "@elizaos/adapter-sqlite";
+import { SqliteDatabaseAdapter } from '@elizaos/adapter-sqlite';
 
-import Database from "better-sqlite3";
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
@@ -455,20 +454,17 @@ export async function initializeClients(character: Character, runtime: IAgentRun
 }
 
 function initializeDatabase(dataDir: string) {
-    const filePath =
-        process.env.SQLITE_FILE ?? path.resolve(dataDir, "db.sqlite");
+    const filePath = process.env.SQLITE_FILE ?? path.resolve(dataDir, 'db.sqlite');
     elizaLogger.info(`Initializing SQLite database at ${filePath}...`);
     const db = new SqliteDatabaseAdapter(new Database(filePath));
 
     // Test the connection
     db.init()
         .then(() => {
-            elizaLogger.success(
-                "Successfully connected to SQLite database"
-            );
+            elizaLogger.success('Successfully connected to SQLite database');
         })
         .catch((error) => {
-            elizaLogger.error("Failed to connect to SQLite:", error);
+            elizaLogger.error('Failed to connect to SQLite:', error);
         });
 
     return db;
@@ -489,9 +485,7 @@ export async function createAgent(
         evaluators: [],
         character,
         // character.plugins are handled when clients are added
-        plugins: []
-            .flat()
-            .filter(Boolean),
+        plugins: [].flat().filter(Boolean),
         providers: [],
         managers: [],
         cacheManager: cache,
@@ -559,9 +553,8 @@ async function startAgent(character: Character, directClient: DirectClient): Pro
             fs.mkdirSync(dataDir, { recursive: true });
         }
 
-        db = initializeDatabase(dataDir) as IDatabaseAdapter &
-        IDatabaseCacheAdapter;
-    
+        db = initializeDatabase(dataDir) as IDatabaseAdapter & IDatabaseCacheAdapter;
+
         await db.init();
 
         const cache = initializeCache(
@@ -620,12 +613,14 @@ const hasValidRemoteUrls = () =>
     process.env.REMOTE_CHARACTER_URLS !== '' &&
     process.env.REMOTE_CHARACTER_URLS.startsWith('http');
 
-const startAgents = async () => {
+export const startAgents = async (plugins: { name: string, description: string }[]) => {
     const directClient = new DirectClient();
     let serverPort = Number.parseInt(settings.SERVER_PORT || '3000');
     const args = parseArguments();
     const charactersArg = args.characters || args.character;
     let characters = [defaultCharacter];
+
+    defaultCharacter.plugins = plugins;
 
     if (charactersArg || hasValidRemoteUrls()) {
         characters = await loadCharacters(charactersArg);
@@ -671,10 +666,10 @@ const startAgents = async () => {
     );
 };
 
-startAgents().catch((error) => {
-    elizaLogger.error('Unhandled error in startAgents:', error);
-    process.exit(1);
-});
+// startAgents().catch((error) => {
+//     elizaLogger.error('Unhandled error in startAgents:', error);
+//     process.exit(1);
+// });
 
 // Prevent unhandled exceptions from crashing the process if desired
 if (
