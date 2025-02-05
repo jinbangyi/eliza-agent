@@ -1,16 +1,21 @@
 {
-    "extends": "../packages/core/tsconfig.json",
-    "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
-        "module": "ESNext",
-        "moduleResolution": "Bundler",
-        "types": ["node", "jest"]
-    },
+    "include": ["src"],
     "ts-node": {
         "experimentalSpecifierResolution": "node",
         "transpileOnly": true,
         "esm": true
     },
-    "include": ["src"]
+    "compilerOptions": {
+        "outDir": "dist",
+        "rootDir": ".",
+        "target": "ES2020",
+        "module": "ESNext",
+        "moduleResolution": "node",
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "allowImportingTsExtensions": true,
+        "noEmit": true,
+        "allowSyntheticDefaultImports": true
+    }
 }

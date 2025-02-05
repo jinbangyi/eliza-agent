@@ -1,13 +1,3 @@
-import { PostgresDatabaseAdapter } from "@elizaos/adapter-postgres";
-import { RedisClient } from "@elizaos/adapter-redis";
-import { MongoDBDatabaseAdapter } from "@elizaos/adapter-mongodb";
-import { AutoClientInterface } from "@elizaos/client-auto";
-
-import { DiscordClientInterface } from "@elizaos/client-discord";
-import { TelegramClientInterface } from "@elizaos/client-telegram";
-import { TwitterClientInterface } from "@elizaos/client-twitter";
-import { FarcasterClientInterface } from "@elizaos/client-farcaster";
-import { DirectClient } from "@elizaos/client-direct";
 import {
     AgentRuntime,
     CacheManager,
@@ -28,32 +18,49 @@ import {
     settings,
     stringToUuid,
     validateCharacterConfig,
-} from "@elizaos/core";
+} from '@elizaos/core';
 
-import { bootstrapPlugin } from "@elizaos/plugin-bootstrap";
-import { normalizeCharacter } from "@elizaos/plugin-di";
+import { DirectClient } from '@elizaos/client-direct';
 
-import { solanaPlugin } from "@elizaos/plugin-solana";
-import { solanaPluginV2 } from "@elizaos/plugin-solana-v2";
-import { pythDataPlugin } from "@elizaos/plugin-pyth-data";
-import { openaiPlugin } from "@elizaos/plugin-openai";
-import fs from "fs";
-import net from "net";
-import path from "path";
-import { fileURLToPath } from "url";
-import yargs from "yargs";
-import { MongoClient } from "mongodb";
+import { openaiPlugin } from '@elizaos/plugin-openai';
+import { normalizeCharacter } from '@elizaos/plugin-di';
+
+import { SqliteDatabaseAdapter } from "@elizaos/adapter-sqlite";
+
+import Database from "better-sqlite3";
+import fs from 'fs';
+import net from 'net';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import yargs from 'yargs';
+
+interface JsonCharacter {
+    id: Character['id'];
+    name: Character['name'];
+    settings: Character['settings'];
+    style: Character['style'];
+    modelProvider: Character['modelProvider'];
+    bio: Character['bio'];
+    lore: Character['lore'];
+    messageExamples: Character['messageExamples'];
+    postExamples: Character['postExamples'];
+    topics: Character['topics'];
+    adjectives: Character['adjectives'];
+    clients: Character['clients'];
+
+    plugins: string[];
+    extends: string[];
+}
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
 
 export const wait = (minTime = 1000, maxTime = 3000) => {
-    const waitTime =
-        Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
+    const waitTime = Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
     return new Promise((resolve) => setTimeout(resolve, waitTime));
 };
 
-const logFetch = async (url: string, options: any) => {
+const logFetch = async (url: string, options: RequestInit) => {
     elizaLogger.debug(`Fetching ${url}`);
     // Disabled to avoid disclosure of sensitive information such as API keys
     // elizaLogger.debug(JSON.stringify(options, null, 2));
@@ -66,119 +73,53 @@ export function parseArguments(): {
 } {
     try {
         return yargs(process.argv.slice(3))
-            .option("character", {
-                type: "string",
-                description: "Path to the character JSON file",
+            .option('character', {
+                type: 'string',
+                description: 'Path to the character JSON file',
             })
-            .option("characters", {
-                type: "string",
-                description:
-                    "Comma separated list of paths to character JSON files",
+            .option('characters', {
+                type: 'string',
+                description: 'Comma separated list of paths to character JSON files',
             })
             .parseSync();
     } catch (error) {
-        elizaLogger.error("Error parsing arguments:", error);
+        elizaLogger.error('Error parsing arguments:', error);
         return {};
     }
 }
 
 function tryLoadFile(filePath: string): string | null {
     try {
-        return fs.readFileSync(filePath, "utf8");
+        return fs.readFileSync(filePath, 'utf8');
     } catch (e) {
+        elizaLogger.error(`Error loading file ${filePath}: ${e}`);
         return null;
     }
 }
+
 function mergeCharacters(base: Character, child: Character): Character {
     const mergeObjects = (baseObj: any, childObj: any) => {
         const result: any = {};
-        const keys = new Set([
-            ...Object.keys(baseObj || {}),
-            ...Object.keys(childObj || {}),
-        ]);
-        keys.forEach((key) => {
+        const keys = new Set([...Object.keys(baseObj || {}), ...Object.keys(childObj || {})]);
+
+        for (const key of keys) {
             if (
-                typeof baseObj[key] === "object" &&
-                typeof childObj[key] === "object" &&
+                typeof baseObj[key] === 'object' &&
+                typeof childObj[key] === 'object' &&
                 !Array.isArray(baseObj[key]) &&
                 !Array.isArray(childObj[key])
             ) {
                 result[key] = mergeObjects(baseObj[key], childObj[key]);
-            } else if (
-                Array.isArray(baseObj[key]) ||
-                Array.isArray(childObj[key])
-            ) {
-                result[key] = [
-                    ...(baseObj[key] || []),
-                    ...(childObj[key] || []),
-                ];
+            } else if (Array.isArray(baseObj[key]) || Array.isArray(childObj[key])) {
+                result[key] = [...(baseObj[key] || []), ...(childObj[key] || [])];
             } else {
-                result[key] =
-                    childObj[key] !== undefined ? childObj[key] : baseObj[key];
+                result[key] = childObj[key] !== undefined ? childObj[key] : baseObj[key];
             }
-        });
+        }
+
         return result;
     };
     return mergeObjects(base, child);
-}
-function isAllStrings(arr: unknown[]): boolean {
-    return Array.isArray(arr) && arr.every((item) => typeof item === "string");
-}
-export async function loadCharacterFromOnchain(): Promise<Character[]> {
-    const jsonText = onchainJson;
-
-    console.log("JSON:", jsonText);
-    if (!jsonText) return [];
-    const loadedCharacters = [];
-    try {
-        const character = JSON.parse(jsonText);
-        validateCharacterConfig(character);
-
-        // .id isn't really valid
-        const characterId = character.id || character.name;
-        const characterPrefix = `CHARACTER.${characterId
-            .toUpperCase()
-            .replace(/ /g, "_")}.`;
-
-        const characterSettings = Object.entries(process.env)
-            .filter(([key]) => key.startsWith(characterPrefix))
-            .reduce((settings, [key, value]) => {
-                const settingKey = key.slice(characterPrefix.length);
-                settings[settingKey] = value;
-                return settings;
-            }, {});
-
-        if (Object.keys(characterSettings).length > 0) {
-            character.settings = character.settings || {};
-            character.settings.secrets = {
-                ...characterSettings,
-                ...character.settings.secrets,
-            };
-        }
-
-        // Handle plugins
-        if (isAllStrings(character.plugins)) {
-            elizaLogger.info("Plugins are: ", character.plugins);
-            const importedPlugins = await Promise.all(
-                character.plugins.map(async (plugin) => {
-                    const importedPlugin = await import(plugin);
-                    return importedPlugin.default;
-                })
-            );
-            character.plugins = importedPlugins;
-        }
-
-        loadedCharacters.push(character);
-        elizaLogger.info(
-            `Successfully loaded character from: ${process.env.IQ_WALLET_ADDRESS}`
-        );
-        return loadedCharacters;
-    } catch (e) {
-        elizaLogger.error(
-            `Error parsing character from ${process.env.IQ_WALLET_ADDRESS}: ${e}`
-        );
-        process.exit(1);
-    }
 }
 
 async function loadCharactersFromUrl(url: string): Promise<Character[]> {
@@ -189,7 +130,7 @@ async function loadCharactersFromUrl(url: string): Promise<Character[]> {
         let characters: Character[] = [];
         if (Array.isArray(responseJson)) {
             characters = await Promise.all(
-                responseJson.map((character) => jsonToCharacter(url, character))
+                responseJson.map((character) => jsonToCharacter(url, character)),
             );
         } else {
             const character = await jsonToCharacter(url, responseJson);
@@ -202,22 +143,18 @@ async function loadCharactersFromUrl(url: string): Promise<Character[]> {
     }
 }
 
-async function jsonToCharacter(
-    filePath: string,
-    character: any
-): Promise<Character> {
+async function jsonToCharacter(filePath: string, character: JsonCharacter): Promise<Character> {
     validateCharacterConfig(character);
 
     // .id isn't really valid
     const characterId = character.id || character.name;
-    const characterPrefix = `CHARACTER.${characterId
-        .toUpperCase()
-        .replace(/ /g, "_")}.`;
+    const characterPrefix = `CHARACTER.${characterId.toUpperCase().replace(/ /g, '_')}.`;
     const characterSettings = Object.entries(process.env)
         .filter(([key]) => key.startsWith(characterPrefix))
         .reduce((settings, [key, value]) => {
             const settingKey = key.slice(characterPrefix.length);
-            return { ...settings, [settingKey]: value };
+            settings[settingKey] = value;
+            return settings;
         }, {});
     if (Object.keys(characterSettings).length > 0) {
         character.settings = character.settings || {};
@@ -226,23 +163,22 @@ async function jsonToCharacter(
             ...character.settings.secrets,
         };
     }
+
     // Handle plugins
-    character.plugins = await handlePluginImporting(character.plugins);
+    const plugins = await handlePluginImporting(character.plugins);
+    let retCharacter: Character = { ...character, plugins };
+
     if (character.extends) {
-        elizaLogger.info(
-            `Merging  ${character.name} character with parent characters`
-        );
+        elizaLogger.info(`Merging  ${character.name} character with parent characters`);
         for (const extendPath of character.extends) {
             const baseCharacter = await loadCharacter(
-                path.resolve(path.dirname(filePath), extendPath)
+                path.resolve(path.dirname(filePath), extendPath),
             );
-            character = mergeCharacters(baseCharacter, character);
-            elizaLogger.info(
-                `Merged ${character.name} with ${baseCharacter.name}`
-            );
+            retCharacter = mergeCharacters(baseCharacter, retCharacter);
+            elizaLogger.info(`Merged ${character.name} with ${baseCharacter.name}`);
         }
     }
-    return character;
+    return retCharacter;
 }
 
 async function loadCharacter(filePath: string): Promise<Character> {
@@ -256,29 +192,25 @@ async function loadCharacter(filePath: string): Promise<Character> {
 
 async function loadCharacterTryPath(characterPath: string): Promise<Character> {
     let content: string | null = null;
-    let resolvedPath = "";
+    let resolvedPath = '';
 
     // Try different path resolutions in order
     const pathsToTry = [
         characterPath, // exact path as specified
         path.resolve(process.cwd(), characterPath), // relative to cwd
-        path.resolve(process.cwd(), "agent", characterPath), // Add this
+        path.resolve(process.cwd(), 'agent', characterPath), // Add this
         path.resolve(__dirname, characterPath), // relative to current script
-        path.resolve(__dirname, "characters", path.basename(characterPath)), // relative to agent/characters
-        path.resolve(__dirname, "../characters", path.basename(characterPath)), // relative to characters dir from agent
-        path.resolve(
-            __dirname,
-            "../../characters",
-            path.basename(characterPath)
-        ), // relative to project root characters dir
+        path.resolve(__dirname, 'characters', path.basename(characterPath)), // relative to agent/characters
+        path.resolve(__dirname, '../characters', path.basename(characterPath)), // relative to characters dir from agent
+        path.resolve(__dirname, '../../characters', path.basename(characterPath)), // relative to project root characters dir
     ];
 
     elizaLogger.info(
-        "Trying paths:",
+        'Trying paths:',
         pathsToTry.map((p) => ({
             path: p,
             exists: fs.existsSync(p),
-        }))
+        })),
     );
 
     for (const tryPath of pathsToTry) {
@@ -291,12 +223,12 @@ async function loadCharacterTryPath(characterPath: string): Promise<Character> {
 
     if (content === null) {
         elizaLogger.error(
-            `Error loading character from ${characterPath}: File not found in any of the expected locations`
+            `Error loading character from ${characterPath}: File not found in any of the expected locations`,
         );
-        elizaLogger.error("Tried the following paths:");
+        elizaLogger.error('Tried the following paths:');
         pathsToTry.forEach((p) => elizaLogger.error(` - ${p}`));
         throw new Error(
-            `Error loading character from ${characterPath}: File not found in any of the expected locations`
+            `Error loading character from ${characterPath}: File not found in any of the expected locations`,
         );
     }
     try {
@@ -310,14 +242,12 @@ async function loadCharacterTryPath(characterPath: string): Promise<Character> {
 }
 
 function commaSeparatedStringToArray(commaSeparated: string): string[] {
-    return commaSeparated?.split(",").map((value) => value.trim());
+    return commaSeparated?.split(',').map((value) => value.trim());
 }
 
-async function readCharactersFromStorage(
-    characterPaths: string[]
-): Promise<string[]> {
+async function readCharactersFromStorage(characterPaths: string[]): Promise<string[]> {
     try {
-        const uploadDir = path.join(process.cwd(), "data", "characters");
+        const uploadDir = path.join(process.cwd(), 'data', 'characters');
         await fs.promises.mkdir(uploadDir, { recursive: true });
         const fileNames = await fs.promises.readdir(uploadDir);
         fileNames.forEach((fileName) => {
@@ -330,12 +260,10 @@ async function readCharactersFromStorage(
     return characterPaths;
 }
 
-export async function loadCharacters(
-    charactersArg: string
-): Promise<Character[]> {
+export async function loadCharacters(charactersArg: string): Promise<Character[]> {
     let characterPaths = commaSeparatedStringToArray(charactersArg);
 
-    if (process.env.USE_CHARACTER_STORAGE === "true") {
+    if (process.env.USE_CHARACTER_STORAGE === 'true') {
         characterPaths = await readCharactersFromStorage(characterPaths);
     }
 
@@ -344,21 +272,18 @@ export async function loadCharacters(
     if (characterPaths?.length > 0) {
         for (const characterPath of characterPaths) {
             try {
-                const character: Character = await loadCharacterTryPath(
-                    characterPath
-                );
+                const character: Character = await loadCharacterTryPath(characterPath);
                 loadedCharacters.push(character);
             } catch (e) {
+                elizaLogger.error(`Error load character: ${e}`);
                 process.exit(1);
             }
         }
     }
 
     if (hasValidRemoteUrls()) {
-        elizaLogger.info("Loading characters from remote URLs");
-        const characterUrls = commaSeparatedStringToArray(
-            process.env.REMOTE_CHARACTER_URLS
-        );
+        elizaLogger.info('Loading characters from remote URLs');
+        const characterUrls = commaSeparatedStringToArray(process.env.REMOTE_CHARACTER_URLS);
         for (const characterUrl of characterUrls) {
             const characters = await loadCharactersFromUrl(characterUrl);
             loadedCharacters.push(...characters);
@@ -366,7 +291,7 @@ export async function loadCharacters(
     }
 
     if (loadedCharacters.length === 0) {
-        elizaLogger.warn("No characters found, using default character");
+        elizaLogger.warn('No characters found, using default character');
         loadedCharacters.push(defaultCharacter);
     }
 
@@ -375,65 +300,49 @@ export async function loadCharacters(
 
 async function handlePluginImporting(plugins: string[]) {
     if (plugins.length > 0) {
-        elizaLogger.info("Plugins are: ", plugins);
+        elizaLogger.info('Plugins are: ', plugins);
         const importedPlugins = await Promise.all(
             plugins.map(async (plugin) => {
                 try {
                     const importedPlugin = await import(plugin);
-                    const functionName =
-                        plugin
-                            .replace("@elizaos/plugin-", "")
-                            .replace(/-./g, (x) => x[1].toUpperCase()) +
-                        "Plugin"; // Assumes plugin function is camelCased with Plugin suffix
-                    return (
-                        importedPlugin.default || importedPlugin[functionName]
-                    );
+                    const functionName = `${plugin
+                        .replace('@elizaos/plugin-', '')
+                        .replace(/-./g, (x) => x[1].toUpperCase())}Plugin`; // Assumes plugin function is camelCased with Plugin suffix
+                    return importedPlugin.default || importedPlugin[functionName];
                 } catch (importError) {
-                    elizaLogger.error(
-                        `Failed to import plugin: ${plugin}`,
-                        importError
-                    );
+                    elizaLogger.error(`Failed to import plugin: ${plugin}`, importError);
                     return []; // Return null for failed imports
                 }
-            })
+            }),
         );
         return importedPlugins;
-    } else {
-        return [];
     }
+
+    return [];
 }
 
 export function getTokenForProvider(
     provider: ModelProviderName,
-    character: Character
+    character: Character,
 ): string | undefined {
     switch (provider) {
         // no key needed for llama_local, ollama, lmstudio, gaianet or bedrock
         case ModelProviderName.LLAMALOCAL:
-            return "";
+            return '';
         case ModelProviderName.OLLAMA:
-            return "";
+            return '';
         case ModelProviderName.LMSTUDIO:
-            return "";
+            return '';
         case ModelProviderName.GAIANET:
-            return "";
+            return '';
         case ModelProviderName.BEDROCK:
-            return "";
+            return '';
         case ModelProviderName.OPENAI:
-            return (
-                character.settings?.secrets?.OPENAI_API_KEY ||
-                settings.OPENAI_API_KEY
-            );
+            return character.settings?.secrets?.OPENAI_API_KEY || settings.OPENAI_API_KEY;
         case ModelProviderName.ETERNALAI:
-            return (
-                character.settings?.secrets?.ETERNALAI_API_KEY ||
-                settings.ETERNALAI_API_KEY
-            );
+            return character.settings?.secrets?.ETERNALAI_API_KEY || settings.ETERNALAI_API_KEY;
         case ModelProviderName.NINETEEN_AI:
-            return (
-                character.settings?.secrets?.NINETEEN_AI_API_KEY ||
-                settings.NINETEEN_AI_API_KEY
-            );
+            return character.settings?.secrets?.NINETEEN_AI_API_KEY || settings.NINETEEN_AI_API_KEY;
         case ModelProviderName.LLAMACLOUD:
         case ModelProviderName.TOGETHER:
             return (
@@ -453,224 +362,79 @@ export function getTokenForProvider(
                 settings.CLAUDE_API_KEY
             );
         case ModelProviderName.REDPILL:
-            return (
-                character.settings?.secrets?.REDPILL_API_KEY ||
-                settings.REDPILL_API_KEY
-            );
+            return character.settings?.secrets?.REDPILL_API_KEY || settings.REDPILL_API_KEY;
         case ModelProviderName.OPENROUTER:
-            return (
-                character.settings?.secrets?.OPENROUTER_API_KEY ||
-                settings.OPENROUTER_API_KEY
-            );
+            return character.settings?.secrets?.OPENROUTER_API_KEY || settings.OPENROUTER_API_KEY;
         case ModelProviderName.GROK:
-            return (
-                character.settings?.secrets?.GROK_API_KEY ||
-                settings.GROK_API_KEY
-            );
+            return character.settings?.secrets?.GROK_API_KEY || settings.GROK_API_KEY;
         case ModelProviderName.HEURIST:
-            return (
-                character.settings?.secrets?.HEURIST_API_KEY ||
-                settings.HEURIST_API_KEY
-            );
+            return character.settings?.secrets?.HEURIST_API_KEY || settings.HEURIST_API_KEY;
         case ModelProviderName.GROQ:
-            return (
-                character.settings?.secrets?.GROQ_API_KEY ||
-                settings.GROQ_API_KEY
-            );
+            return character.settings?.secrets?.GROQ_API_KEY || settings.GROQ_API_KEY;
         case ModelProviderName.GALADRIEL:
-            return (
-                character.settings?.secrets?.GALADRIEL_API_KEY ||
-                settings.GALADRIEL_API_KEY
-            );
+            return character.settings?.secrets?.GALADRIEL_API_KEY || settings.GALADRIEL_API_KEY;
         case ModelProviderName.FAL:
-            return (
-                character.settings?.secrets?.FAL_API_KEY || settings.FAL_API_KEY
-            );
+            return character.settings?.secrets?.FAL_API_KEY || settings.FAL_API_KEY;
         case ModelProviderName.ALI_BAILIAN:
-            return (
-                character.settings?.secrets?.ALI_BAILIAN_API_KEY ||
-                settings.ALI_BAILIAN_API_KEY
-            );
+            return character.settings?.secrets?.ALI_BAILIAN_API_KEY || settings.ALI_BAILIAN_API_KEY;
         case ModelProviderName.VOLENGINE:
-            return (
-                character.settings?.secrets?.VOLENGINE_API_KEY ||
-                settings.VOLENGINE_API_KEY
-            );
+            return character.settings?.secrets?.VOLENGINE_API_KEY || settings.VOLENGINE_API_KEY;
         case ModelProviderName.NANOGPT:
-            return (
-                character.settings?.secrets?.NANOGPT_API_KEY ||
-                settings.NANOGPT_API_KEY
-            );
+            return character.settings?.secrets?.NANOGPT_API_KEY || settings.NANOGPT_API_KEY;
         case ModelProviderName.HYPERBOLIC:
-            return (
-                character.settings?.secrets?.HYPERBOLIC_API_KEY ||
-                settings.HYPERBOLIC_API_KEY
-            );
+            return character.settings?.secrets?.HYPERBOLIC_API_KEY || settings.HYPERBOLIC_API_KEY;
 
         case ModelProviderName.VENICE:
-            return (
-                character.settings?.secrets?.VENICE_API_KEY ||
-                settings.VENICE_API_KEY
-            );
+            return character.settings?.secrets?.VENICE_API_KEY || settings.VENICE_API_KEY;
         case ModelProviderName.ATOMA:
             return (
-                character.settings?.secrets?.ATOMASDK_BEARER_AUTH ||
-                settings.ATOMASDK_BEARER_AUTH
+                character.settings?.secrets?.ATOMASDK_BEARER_AUTH || settings.ATOMASDK_BEARER_AUTH
             );
         case ModelProviderName.NVIDIA:
-            return (
-                character.settings?.secrets?.NVIDIA_API_KEY ||
-                settings.NVIDIA_API_KEY
-            );
+            return character.settings?.secrets?.NVIDIA_API_KEY || settings.NVIDIA_API_KEY;
         case ModelProviderName.AKASH_CHAT_API:
-            return (
-                character.settings?.secrets?.AKASH_CHAT_API_KEY ||
-                settings.AKASH_CHAT_API_KEY
-            );
+            return character.settings?.secrets?.AKASH_CHAT_API_KEY || settings.AKASH_CHAT_API_KEY;
         case ModelProviderName.GOOGLE:
             return (
                 character.settings?.secrets?.GOOGLE_GENERATIVE_AI_API_KEY ||
                 settings.GOOGLE_GENERATIVE_AI_API_KEY
             );
         case ModelProviderName.MISTRAL:
-            return (
-                character.settings?.secrets?.MISTRAL_API_KEY ||
-                settings.MISTRAL_API_KEY
-            );
+            return character.settings?.secrets?.MISTRAL_API_KEY || settings.MISTRAL_API_KEY;
         case ModelProviderName.LETZAI:
-            return (
-                character.settings?.secrets?.LETZAI_API_KEY ||
-                settings.LETZAI_API_KEY
-            );
+            return character.settings?.secrets?.LETZAI_API_KEY || settings.LETZAI_API_KEY;
         case ModelProviderName.INFERA:
-            return (
-                character.settings?.secrets?.INFERA_API_KEY ||
-                settings.INFERA_API_KEY
-            );
+            return character.settings?.secrets?.INFERA_API_KEY || settings.INFERA_API_KEY;
         case ModelProviderName.DEEPSEEK:
-            return (
-                character.settings?.secrets?.DEEPSEEK_API_KEY ||
-                settings.DEEPSEEK_API_KEY
-            );
+            return character.settings?.secrets?.DEEPSEEK_API_KEY || settings.DEEPSEEK_API_KEY;
         case ModelProviderName.LIVEPEER:
             return (
-                character.settings?.secrets?.LIVEPEER_GATEWAY_URL ||
-                settings.LIVEPEER_GATEWAY_URL
+                character.settings?.secrets?.LIVEPEER_GATEWAY_URL || settings.LIVEPEER_GATEWAY_URL
             );
-        default:
+        default: {
             const errorMessage = `Failed to get token - unsupported model provider: ${provider}`;
             elizaLogger.error(errorMessage);
             throw new Error(errorMessage);
-    }
-}
-
-function initializeDatabase(dataDir: string) {
-    if (process.env.MONGODB_CONNECTION_STRING) {
-        elizaLogger.log("Initializing database on MongoDB Atlas");
-        const client = new MongoClient(process.env.MONGODB_CONNECTION_STRING, {
-            maxPoolSize: 100,
-            minPoolSize: 5,
-            maxIdleTimeMS: 60000,
-            connectTimeoutMS: 10000,
-            serverSelectionTimeoutMS: 5000,
-            socketTimeoutMS: 45000,
-            compressors: ["zlib"],
-            retryWrites: true,
-            retryReads: true,
-        });
-
-        const dbName = process.env.MONGODB_DATABASE || "elizaAgent";
-        const db = new MongoDBDatabaseAdapter(client, dbName);
-
-        // Test the connection
-        db.init()
-            .then(() => {
-                elizaLogger.success("Successfully connected to MongoDB Atlas");
-            })
-            .catch((error) => {
-                elizaLogger.error("Failed to connect to MongoDB Atlas:", error);
-                throw error; // Re-throw to handle it in the calling code
-            });
-
-        return db;
-    } else if (process.env.POSTGRES_URL) {
-        elizaLogger.info("Initializing PostgreSQL connection...");
-        const db = new PostgresDatabaseAdapter({
-            connectionString: process.env.POSTGRES_URL,
-            parseInputs: true,
-        });
-
-        // Test the connection
-        db.init()
-            .then(() => {
-                elizaLogger.success(
-                    "Successfully connected to PostgreSQL database"
-                );
-            })
-            .catch((error) => {
-                elizaLogger.error("Failed to connect to PostgreSQL:", error);
-            });
-
-        return db;
-    } else {
-        throw new Error("No database connection string provided");
+        }
     }
 }
 
 // also adds plugins from character file into the runtime
-export async function initializeClients(
-    character: Character,
-    runtime: IAgentRuntime
-) {
+export async function initializeClients(character: Character, runtime: IAgentRuntime) {
     // each client can only register once
     // and if we want two we can explicitly support it
-    const clients: Record<string, any> = {};
-    const clientTypes: string[] =
-        character.clients?.map((str) => str.toLowerCase()) || [];
-    elizaLogger.log("initializeClients", clientTypes, "for", character.name);
+    const clients: Record<string, unknown> = {};
 
-    // Start Auto Client if "auto" detected as a configured client
-    if (clientTypes.includes(Clients.AUTO)) {
-        const autoClient = await AutoClientInterface.start(runtime);
-        if (autoClient) clients.auto = autoClient;
-    }
-
-    if (clientTypes.includes(Clients.DISCORD)) {
-        const discordClient = await DiscordClientInterface.start(runtime);
-        if (discordClient) clients.discord = discordClient;
-    }
-
-    if (clientTypes.includes(Clients.TELEGRAM)) {
-        const telegramClient = await TelegramClientInterface.start(runtime);
-        if (telegramClient) clients.telegram = telegramClient;
-    }
-
-    if (clientTypes.includes(Clients.TWITTER)) {
-        const twitterClient = await TwitterClientInterface.start(runtime);
-        if (twitterClient) {
-            clients.twitter = twitterClient;
-        }
-    }
-
-    if (clientTypes.includes(Clients.FARCASTER)) {
-        const farcasterClient = await FarcasterClientInterface.start(runtime);
-        if (farcasterClient) {
-            clients.farcaster = farcasterClient;
-        }
-    }
-
-    elizaLogger.log("client keys", Object.keys(clients));
-
-    function determineClientType(client: Client): string {
+    function determineClientType(client: Client & { type?: string }): string {
         // Check if client has a direct type identifier
-        if ("type" in client) {
-            return (client as any).type;
+        if ('type' in client) {
+            return client.type;
         }
 
         // Check constructor name
         const constructorName = client.constructor?.name;
-        if (constructorName && !constructorName.includes("Object")) {
-            return constructorName.toLowerCase().replace("client", "");
+        if (constructorName && !constructorName.includes('Object')) {
+            return constructorName.toLowerCase().replace('client', '');
         }
 
         // Fallback: Generate a unique identifier
@@ -683,9 +447,7 @@ export async function initializeClients(
                 for (const client of plugin.clients) {
                     const startedClient = await client.start(runtime);
                     const clientType = determineClientType(client);
-                    elizaLogger.debug(
-                        `Initializing client of type: ${clientType}`
-                    );
+                    elizaLogger.debug(`Initializing client of type: ${clientType}`);
                     clients[clientType] = startedClient;
                 }
             }
@@ -699,20 +461,33 @@ function getSecret(character: Character, secret: string) {
     return character.settings?.secrets?.[secret] || process.env[secret];
 }
 
-let nodePlugin: any | undefined;
+function initializeDatabase(dataDir: string) {
+    const filePath =
+        process.env.SQLITE_FILE ?? path.resolve(dataDir, "db.sqlite");
+    elizaLogger.info(`Initializing SQLite database at ${filePath}...`);
+    const db = new SqliteDatabaseAdapter(new Database(filePath));
+
+    // Test the connection
+    db.init()
+        .then(() => {
+            elizaLogger.success(
+                "Successfully connected to SQLite database"
+            );
+        })
+        .catch((error) => {
+            elizaLogger.error("Failed to connect to SQLite:", error);
+        });
+
+    return db;
+}
 
 export async function createAgent(
     character: Character,
     db: IDatabaseAdapter,
     cache: ICacheManager,
-    token: string
+    token: string,
 ): Promise<AgentRuntime> {
     elizaLogger.log(`Creating runtime for character ${character.name}`);
-
-    nodePlugin ??= createNodePlugin();
-
-    const teeMode = getSecret(character, "TEE_MODE") || "OFF";
-    const walletSecretSalt = getSecret(character, "WALLET_SECRET_SALT");
 
     return new AgentRuntime({
         databaseAdapter: db,
@@ -722,35 +497,10 @@ export async function createAgent(
         character,
         // character.plugins are handled when clients are added
         plugins: [
-            parseBooleanFromText(getSecret(character, "BITMIND")) &&
-            bootstrapPlugin,
-            getSecret(character, "SOLANA_PUBLIC_KEY") ||
-            (getSecret(character, "WALLET_PUBLIC_KEY") &&
-                !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith("0x"))
-                ? [solanaPlugin, solanaPluginV2]
-                : null,
-            (getSecret(character, "SOLANA_PUBLIC_KEY") ||
-                (getSecret(character, "WALLET_PUBLIC_KEY") &&
-                    !getSecret(character, "WALLET_PUBLIC_KEY")?.startsWith(
-                        "0x"
-                    ))) &&
-            getSecret(character, "SOLANA_ADMIN_PUBLIC_KEY") &&
-            getSecret(character, "SOLANA_PRIVATE_KEY") &&
-            getSecret(character, "OPENAI_API_KEY") ||
-            getSecret(character, "HEURIST_API_KEY") ||
-
-            getSecret(character, "PYTH_TESTNET_PROGRAM_KEY") ||
-            getSecret(character, "PYTH_MAINNET_PROGRAM_KEY")
-                ? pythDataPlugin
-                : null,
-
-            getSecret(character, "OPENAI_API_KEY") &&
-            parseBooleanFromText(
-                getSecret(character, "ENABLE_OPEN_AI_COMMUNITY_PLUGIN")
-            )
+            getSecret(character, 'OPENAI_API_KEY') &&
+            parseBooleanFromText(getSecret(character, 'ENABLE_OPEN_AI_COMMUNITY_PLUGIN'))
                 ? openaiPlugin
                 : null,
-
         ]
             .flat()
             .filter(Boolean),
@@ -763,11 +513,9 @@ export async function createAgent(
 
 function initializeFsCache(baseDir: string, character: Character) {
     if (!character?.id) {
-        throw new Error(
-            "initializeFsCache requires id to be set in character definition"
-        );
+        throw new Error('initializeFsCache requires id to be set in character definition');
     }
-    const cacheDir = path.resolve(baseDir, character.id, "cache");
+    const cacheDir = path.resolve(baseDir, character.id, 'cache');
 
     const cache = new CacheManager(new FsCacheAdapter(cacheDir));
     return cache;
@@ -775,9 +523,7 @@ function initializeFsCache(baseDir: string, character: Character) {
 
 function initializeDbCache(character: Character, db: IDatabaseCacheAdapter) {
     if (!character?.id) {
-        throw new Error(
-            "initializeFsCache requires id to be set in character definition"
-        );
+        throw new Error('initializeFsCache requires id to be set in character definition');
     }
     const cache = new CacheManager(new DbCacheAdapter(db, character.id));
     return cache;
@@ -787,84 +533,57 @@ function initializeCache(
     cacheStore: string,
     character: Character,
     baseDir?: string,
-    db?: IDatabaseCacheAdapter
+    db?: IDatabaseCacheAdapter,
 ) {
     switch (cacheStore) {
-        case CacheStore.REDIS:
-            if (process.env.REDIS_URL) {
-                elizaLogger.info("Connecting to Redis...");
-                const redisClient = new RedisClient(process.env.REDIS_URL);
-                if (!character?.id) {
-                    throw new Error(
-                        "CacheStore.REDIS requires id to be set in character definition"
-                    );
-                }
-                return new CacheManager(
-                    new DbCacheAdapter(redisClient, character.id) // Using DbCacheAdapter since RedisClient also implements IDatabaseCacheAdapter
-                );
-            } else {
-                throw new Error("REDIS_URL environment variable is not set.");
-            }
-
         case CacheStore.DATABASE:
             if (db) {
-                elizaLogger.info("Using Database Cache...");
+                elizaLogger.info('Using Database Cache...');
                 return initializeDbCache(character, db);
-            } else {
-                throw new Error(
-                    "Database adapter is not provided for CacheStore.Database."
-                );
             }
 
+            throw new Error('Database adapter is not provided for CacheStore.Database.');
+
         case CacheStore.FILESYSTEM:
-            elizaLogger.info("Using File System Cache...");
+            elizaLogger.info('Using File System Cache...');
             if (!baseDir) {
-                throw new Error(
-                    "baseDir must be provided for CacheStore.FILESYSTEM."
-                );
+                throw new Error('baseDir must be provided for CacheStore.FILESYSTEM.');
             }
             return initializeFsCache(baseDir, character);
 
         default:
             throw new Error(
-                `Invalid cache store: ${cacheStore} or required configuration missing.`
+                `Invalid cache store: ${cacheStore} or required configuration missing.`,
             );
     }
 }
 
-async function startAgent(
-    character: Character,
-    directClient: DirectClient
-): Promise<AgentRuntime> {
+async function startAgent(character: Character, directClient: DirectClient): Promise<AgentRuntime> {
     let db: IDatabaseAdapter & IDatabaseCacheAdapter;
     try {
         character.id ??= stringToUuid(character.name);
         character.username ??= character.name;
 
         const token = getTokenForProvider(character.modelProvider, character);
-        const dataDir = path.join(__dirname, "../data");
+        const dataDir = path.join(__dirname, '../data');
 
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
 
         db = initializeDatabase(dataDir) as IDatabaseAdapter &
-            IDatabaseCacheAdapter;
-
+        IDatabaseCacheAdapter;
+    
         await db.init();
 
         const cache = initializeCache(
-            process.env.CACHE_STORE ?? CacheStore.DATABASE,
+            process.env.CACHE_STORE ?? CacheStore.FILESYSTEM,
             character,
-            "",
-            db
-        ); // "" should be replaced with dir for file system caching. THOUGHTS: might probably make this into an env
-        const runtime: AgentRuntime = await createAgent(
-            character,
+            'data',
             db,
-            cache,
-            token
-        );
+        ); // "" should be replaced with dir for file system caching. THOUGHTS: might probably make this into an env
+
+        const runtime: AgentRuntime = await createAgent(character, db, cache, token);
 
         // start services/plugins/process knowledge
         await runtime.initialize();
@@ -880,11 +599,8 @@ async function startAgent(
 
         return runtime;
     } catch (error) {
-        elizaLogger.error(
-            `Error starting agent for character ${character.name}:`,
-            error
-        );
-        elizaLogger.error(error);
+        elizaLogger.error(`Error starting agent for character ${character.name}: ${error}`);
+        // elizaLogger.error(error);
         if (db) {
             await db.close();
         }
@@ -896,13 +612,13 @@ const checkPortAvailable = (port: number): Promise<boolean> => {
     return new Promise((resolve) => {
         const server = net.createServer();
 
-        server.once("error", (err: NodeJS.ErrnoException) => {
-            if (err.code === "EADDRINUSE") {
+        server.once('error', (err: NodeJS.ErrnoException) => {
+            if (err.code === 'EADDRINUSE') {
                 resolve(false);
             }
         });
 
-        server.once("listening", () => {
+        server.once('listening', () => {
             server.close();
             resolve(true);
         });
@@ -913,17 +629,17 @@ const checkPortAvailable = (port: number): Promise<boolean> => {
 
 const hasValidRemoteUrls = () =>
     process.env.REMOTE_CHARACTER_URLS &&
-    process.env.REMOTE_CHARACTER_URLS !== "" &&
-    process.env.REMOTE_CHARACTER_URLS.startsWith("http");
+    process.env.REMOTE_CHARACTER_URLS !== '' &&
+    process.env.REMOTE_CHARACTER_URLS.startsWith('http');
 
 const startAgents = async () => {
     const directClient = new DirectClient();
-    let serverPort = Number.parseInt(settings.SERVER_PORT || "3000");
+    let serverPort = Number.parseInt(settings.SERVER_PORT || '3000');
     const args = parseArguments();
     const charactersArg = args.characters || args.character;
     let characters = [defaultCharacter];
 
-    if ((charactersArg) || hasValidRemoteUrls()) {
+    if (charactersArg || hasValidRemoteUrls()) {
         characters = await loadCharacters(charactersArg);
     }
 
@@ -935,14 +651,12 @@ const startAgents = async () => {
             await startAgent(character, directClient);
         }
     } catch (error) {
-        elizaLogger.error("Error starting agents:", error);
+        elizaLogger.error('Error starting agents:', error);
     }
 
     // Find available port
     while (!(await checkPortAvailable(serverPort))) {
-        elizaLogger.warn(
-            `Port ${serverPort} is in use, trying ${serverPort + 1}`
-        );
+        elizaLogger.warn(`Port ${serverPort} is in use, trying ${serverPort + 1}`);
         serverPort++;
     }
 
@@ -960,17 +674,17 @@ const startAgents = async () => {
 
     directClient.start(serverPort);
 
-    if (serverPort !== Number.parseInt(settings.SERVER_PORT || "3000")) {
+    if (serverPort !== Number.parseInt(settings.SERVER_PORT || '3000')) {
         elizaLogger.log(`Server started on alternate port ${serverPort}`);
     }
 
     elizaLogger.info(
-        "Run `pnpm start:client` to start the client and visit the outputted URL (http://localhost:5173) to chat with your agents. When running multiple agents, use client with different port `SERVER_PORT=3001 pnpm start:client`"
+        'Run `pnpm start:client` to start the client and visit the outputted URL (http://localhost:5173) to chat with your agents. When running multiple agents, use client with different port `SERVER_PORT=3001 pnpm start:client`',
     );
 };
 
 startAgents().catch((error) => {
-    elizaLogger.error("Unhandled error in startAgents:", error);
+    elizaLogger.error('Unhandled error in startAgents:', error);
     process.exit(1);
 });
 
@@ -980,12 +694,12 @@ if (
     parseBooleanFromText(process.env.PREVENT_UNHANDLED_EXIT)
 ) {
     // Handle uncaught exceptions to prevent the process from crashing
-    process.on("uncaughtException", function (err) {
-        console.error("uncaughtException", err);
+    process.on('uncaughtException', (err) => {
+        console.error('uncaughtException', err);
     });
 
     // Handle unhandled rejections to prevent the process from crashing
-    process.on("unhandledRejection", function (err) {
-        console.error("unhandledRejection", err);
+    process.on('unhandledRejection', (err) => {
+        console.error('unhandledRejection', err);
     });
 }
