@@ -21,10 +21,7 @@ import {
 } from '@elizaos/core';
 
 import { DirectClient } from '@elizaos/client-direct';
-
-import { openaiPlugin } from '@elizaos/plugin-openai';
 import { normalizeCharacter } from '@elizaos/plugin-di';
-
 import { SqliteDatabaseAdapter } from "@elizaos/adapter-sqlite";
 
 import Database from "better-sqlite3";
@@ -457,10 +454,6 @@ export async function initializeClients(character: Character, runtime: IAgentRun
     return clients;
 }
 
-function getSecret(character: Character, secret: string) {
-    return character.settings?.secrets?.[secret] || process.env[secret];
-}
-
 function initializeDatabase(dataDir: string) {
     const filePath =
         process.env.SQLITE_FILE ?? path.resolve(dataDir, "db.sqlite");
@@ -496,12 +489,7 @@ export async function createAgent(
         evaluators: [],
         character,
         // character.plugins are handled when clients are added
-        plugins: [
-            getSecret(character, 'OPENAI_API_KEY') &&
-            parseBooleanFromText(getSecret(character, 'ENABLE_OPEN_AI_COMMUNITY_PLUGIN'))
-                ? openaiPlugin
-                : null,
-        ]
+        plugins: []
             .flat()
             .filter(Boolean),
         providers: [],
