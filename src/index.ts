@@ -624,7 +624,7 @@ export const startAgents = async (plugins: { name: string; description: string }
     let characters = [defaultCharacter];
 
     defaultCharacter.plugins = plugins;
-
+    defaultCharacter.modelProvider = ModelProviderName.OPENAI;
 
     if (charactersArg) {
         characters = await loadCharacters(charactersArg);

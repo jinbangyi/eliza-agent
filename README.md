@@ -6,14 +6,17 @@ eliza-agent: `0.1.9`
 
 ```bash
 nvm use 23
-pnpm add github.com:jinbangyi/eliza-agent
+pnpm add github:jinbangyi/eliza-agent#master
 ```
 
 ```typescript
-import { startAgent } from 'eliza-agent'
+import { startAgents } from '@elizaos/agent';
 
-// add you custom plugins
-plugins = []
+const plugins: { name: string; description: string }[] = [];
 
-startAgent(plugins)
+startAgents(plugins).catch((error) => {
+    console.error('Unhandled error in startAgents:', error);
+    process.exit(1);
+});
+
 ```
