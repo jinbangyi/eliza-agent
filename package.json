@@ -1,18 +1,25 @@
 {
     "name": "@elizaos/agent",
     "version": "0.1.9",
-    "main": "src/index.ts",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
     "type": "module",
     "scripts": {
         "start": "node --loader ts-node/esm src/index.ts",
         "dev": "node --loader ts-node/esm src/index.ts",
+        "debug": "node --loader ts-node/esm scripts/debug.ts",
         "check-types": "tsc --noEmit",
-        "test": "jest",
+        "build": "tsup --format esm --dts",
         "lint": "biome check src/",
         "lint:fix": "biome check --apply src/",
         "format": "biome format src/",
         "format:fix": "biome format --write src/"
     },
+    "files": [
+        "dist",
+        "LICENSE",
+        "README.md"
+    ],
     "dependencies": {
         "@elizaos/adapter-sqlite": "0.1.9",
         "@elizaos/client-direct": "0.1.9",

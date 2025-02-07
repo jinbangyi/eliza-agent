@@ -1,9 +1,19 @@
 # eliza-agent
 
-eliza-agent for test purpose
+eliza-agent: `0.1.9`
 
-agent: 
-- plugin-di
-- better-sqlite3
-- @elizaos/adapter-sqlite
+## Quick Start
 
+```bash
+nvm use 23
+pnpm add github.com:jinbangyi/eliza-agent
+```
+
+```typescript
+import { startAgent } from 'eliza-agent'
+
+// add you custom plugins
+plugins = []
+
+startAgent(plugins)
+```

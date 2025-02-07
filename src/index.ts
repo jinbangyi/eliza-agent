@@ -19,9 +19,9 @@ import {
     validateCharacterConfig,
 } from '@elizaos/core';
 
+import { SqliteDatabaseAdapter } from '@elizaos/adapter-sqlite';
 import { DirectClient } from '@elizaos/client-direct';
 import { normalizeCharacter } from '@elizaos/plugin-di';
-import { SqliteDatabaseAdapter } from '@elizaos/adapter-sqlite';
 
 import Database from 'better-sqlite3';
 import fs from 'fs';
@@ -147,9 +147,11 @@ async function jsonToCharacter(filePath: string, character: JsonCharacter): Prom
     const characterPrefix = `CHARACTER.${characterId.toUpperCase().replace(/ /g, '_')}.`;
     const characterSettings = Object.entries(process.env)
         .filter(([key]) => key.startsWith(characterPrefix))
-        .reduce((settings, [key, value]) => {
-            const settingKey = key.slice(characterPrefix.length);
-            settings[settingKey] = value;
+        .reduce((settings: Record<string, string>, [key, value]) => {
+            if (value) {
+                const settingKey = key.slice(characterPrefix.length);
+                settings[settingKey] = value;
+            }
             return settings;
         }, {});
     if (Object.keys(characterSettings).length > 0) {
@@ -249,7 +251,7 @@ async function readCharactersFromStorage(characterPaths: string[]): Promise<stri
         fileNames.forEach((fileName) => {
             characterPaths.push(path.join(uploadDir, fileName));
         });
-    } catch (err) {
+    } catch (err: any) {
         elizaLogger.error(`Error reading directory: ${err.message}`);
     }
 
@@ -279,7 +281,7 @@ export async function loadCharacters(charactersArg: string): Promise<Character[]
 
     if (hasValidRemoteUrls()) {
         elizaLogger.info('Loading characters from remote URLs');
-        const characterUrls = commaSeparatedStringToArray(process.env.REMOTE_CHARACTER_URLS);
+        const characterUrls = commaSeparatedStringToArray(process.env.REMOTE_CHARACTER_URLS ?? '');
         for (const characterUrl of characterUrls) {
             const characters = await loadCharactersFromUrl(characterUrl);
             loadedCharacters.push(...characters);
@@ -424,7 +426,7 @@ export async function initializeClients(character: Character, runtime: IAgentRun
     function determineClientType(client: Client & { type?: string }): string {
         // Check if client has a direct type identifier
         if ('type' in client) {
-            return client.type;
+            return client.type ?? `client_${Date.now()}`;
         }
 
         // Check constructor name
@@ -541,7 +543,8 @@ function initializeCache(
 }
 
 async function startAgent(character: Character, directClient: DirectClient): Promise<AgentRuntime> {
-    let db: IDatabaseAdapter & IDatabaseCacheAdapter;
+    let db: (IDatabaseAdapter & IDatabaseCacheAdapter) | undefined = undefined;
+
     try {
         character.id ??= stringToUuid(character.name);
         character.username ??= character.name;
@@ -564,7 +567,7 @@ async function startAgent(character: Character, directClient: DirectClient): Pro
             db,
         ); // "" should be replaced with dir for file system caching. THOUGHTS: might probably make this into an env
 
-        const runtime: AgentRuntime = await createAgent(character, db, cache, token);
+        const runtime: AgentRuntime = await createAgent(character, db, cache, token ?? '');
 
         // start services/plugins/process knowledge
         await runtime.initialize();
@@ -613,7 +616,7 @@ const hasValidRemoteUrls = () =>
     process.env.REMOTE_CHARACTER_URLS !== '' &&
     process.env.REMOTE_CHARACTER_URLS.startsWith('http');
 
-export const startAgents = async (plugins: { name: string, description: string }[]) => {
+export const startAgents = async (plugins: { name: string; description: string }[]) => {
     const directClient = new DirectClient();
     let serverPort = Number.parseInt(settings.SERVER_PORT || '3000');
     const args = parseArguments();
@@ -622,9 +625,11 @@ export const startAgents = async (plugins: { name: string, description: string }
 
     defaultCharacter.plugins = plugins;
 
-    if (charactersArg || hasValidRemoteUrls()) {
+
+    if (charactersArg) {
         characters = await loadCharacters(charactersArg);
     }
+
 
     // Normalize characters for injectable plugins
     characters = await Promise.all(characters.map(normalizeCharacter));
@@ -643,13 +648,14 @@ export const startAgents = async (plugins: { name: string, description: string }
         serverPort++;
     }
 
+
     // upload some agent functionality into directClient
-    directClient.startAgent = async (character) => {
+    directClient.startAgent = async (character: JsonCharacter) => {
         // Handle plugins
-        character.plugins = await handlePluginImporting(character.plugins);
+        const plugins = await handlePluginImporting(character.plugins);
 
         // wrap it so we don't have to inject directClient later
-        return startAgent(character, directClient);
+        return startAgent({ ...character, plugins }, directClient);
     };
 
     directClient.loadCharacterTryPath = loadCharacterTryPath;
