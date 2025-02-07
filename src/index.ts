@@ -48,8 +48,9 @@ interface JsonCharacter {
     extends: string[];
 }
 
-const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
-const __dirname = path.dirname(__filename); // get the name of the directory
+// const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
+// const __dirname = path.dirname(__filename); // get the name of the directory
+const __dirname = process.cwd();
 
 export const wait = (minTime = 1000, maxTime = 3000) => {
     const waitTime = Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
