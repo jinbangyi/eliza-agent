@@ -20,10 +20,8 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import net from "net";
 import path from "path";
-import { fileURLToPath } from "url";
 import yargs from "yargs";
-var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
+var __dirname = process.cwd();
 var wait = (minTime = 1e3, maxTime = 3e3) => {
   const waitTime = Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
   return new Promise((resolve) => setTimeout(resolve, waitTime));
@@ -465,6 +463,7 @@ var startAgents = async (plugins) => {
   const charactersArg = args.characters || args.character;
   let characters = [defaultCharacter];
   defaultCharacter.plugins = plugins;
+  defaultCharacter.modelProvider = ModelProviderName.OPENAI;
   if (charactersArg) {
     characters = await loadCharacters(charactersArg);
   }
